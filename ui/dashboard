@@ -1,0 +1,324 @@
+# ============================================================
+# DASHBOARD INTERACTIF - STREAMLIT
+# ============================================================
+
+import streamlit as st
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import numpy as np
+import pandas as pd
+import sys
+import os
+
+# Ajouter le chemin parent pour les imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from src.models.grn_model import GRNModel, CalibrationData
+
+# Configuration de la page
+st.set_page_config(
+    page_title="GRN / Yusuf - Modèle Systémique",
+    page_icon="🌐",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# ============================================================
+# SIDEBAR - PARAMÈTRES
+# ============================================================
+
+st.sidebar.title("⚙️ Paramètres du système")
+
+with st.sidebar.expander("💳 Paramètres de dette", expanded=True):
+    D0 = st.slider("Dette initiale", 50.0, 300.0, 100.0, 10.0)
+    r = st.slider("Taux d'intérêt", 0.01, 0.20, 0.05, 0.01)
+
+with st.sidebar.expander("🌍 Ressources et entropie"):
+    E0 = st.slider("Ressources initiales", 500, 2000, 1000, 100)
+    alpha = st.slider("Dégradation (entropie)", 0.001, 0.05, 0.01, 0.001)
+
+with st.sidebar.expander("📦 Principe de Yusuf"):
+    V0 = st.slider("Stock initial", 10, 200, 50, 5)
+    gamma = st.slider("Convertibilité stock/monnaie", 0.5, 2.0, 1.2, 0.1)
+    delta = st.slider("Destruction monétaire", 0.2, 1.5, 0.8, 0.1)
+
+with st.sidebar.expander("🤝 Confiance"):
+    C0 = st.slider("Confiance initiale", 0.1, 1.0, 0.8, 0.05)
+    lam = st.slider("Régénération confiance", 0.01, 0.5, 0.1, 0.01)
+    mu = st.slider("Sensibilité dette/monnaie", 0.1, 0.8, 0.3, 0.05)
+
+t_max = st.sidebar.slider("⏱️ Durée de simulation", 50, 500, 200, 10)
+show_calibration = st.sidebar.checkbox("📊 Afficher le calibrage", False)
+
+# ============================================================
+# FONCTIONS PRINCIPALES
+# ============================================================
+
+@st.cache_data
+def create_model(params, t_max):
+    """Crée et exécute le modèle avec cache"""
+    model = GRNModel(params)
+    results = model.simulate(t_max=t_max)
+    collapse = model.detect_collapse(results)
+    return results, collapse
+
+def plot_results(results):
+    """Crée un graphique interactif avec Plotly"""
+    fig = make_subplots(
+        rows=3, cols=2,
+        subplot_titles=(
+            "💳 Dette", 
+            "🌍 Ressources", 
+            "📦 Stock (Yusuf)", 
+            "🤝 Confiance", 
+            "💰 Masse monétaire", 
+            "⚡ Paramètre de bifurcation"
+        )
+    )
+    
+    # Dette
+    fig.add_trace(
+        go.Scatter(x=results['time'], y=results['debt'], 
+                  name="Dette", line=dict(color='red', width=2)),
+        row=1, col=1
+    )
+    
+    # Ressources
+    fig.add_trace(
+        go.Scatter(x=results['time'], y=results['resources'],
+                  name="Ressources", line=dict(color='green', width=2)),
+        row=1, col=2
+    )
+    
+    # Stock
+    fig.add_trace(
+        go.Scatter(x=results['time'], y=results['stock'],
+                  name="Stock", line=dict(color='blue', width=2)),
+        row=2, col=1
+    )
+    fig.add_hline(y=30, line_dash="dash", line_color="red", row=2, col=1)
+    
+    # Confiance
+    fig.add_trace(
+        go.Scatter(x=results['time'], y=results['confidence'],
+                  name="Confiance", line=dict(color='cyan', width=2)),
+        row=2, col=2
+    )
+    fig.add_hline(y=0.5, line_dash="dash", line_color="red", row=2, col=2)
+    
+    # Masse monétaire
+    fig.add_trace(
+        go.Scatter(x=results['time'], y=results['money'],
+                  name="Monnaie", line=dict(color='magenta', width=2)),
+        row=3, col=1
+    )
+    
+    # Bifurcation
+    fig.add_trace(
+        go.Scatter(x=results['time'], y=results['lambda'],
+                  name="Λ", line=dict(color='orange', width=2)),
+        row=3, col=2
+    )
+    fig.add_hline(y=1.0, line_dash="dash", line_color="red", row=3, col=2)
+    
+    fig.update_layout(
+        height=900, 
+        showlegend=True, 
+        template="plotly_dark",
+        hovermode='x unified'
+    )
+    fig.update_xaxes(title_text="Temps", row=3, col=1)
+    fig.update_xaxes(title_text="Temps", row=3, col=2)
+    
+    return fig
+
+def display_metrics(results, collapse):
+    """Affiche les métriques de stabilité"""
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric(
+            "🤝 Confiance finale",
+            f"{results['confidence'][-1]:.3f}",
+            delta=f"{results['confidence'][-1] - 0.5:.3f}",
+            delta_color="inverse"
+        )
+    
+    with col2:
+        st.metric(
+            "⚡ Paramètre Λ",
+            f"{results['lambda'][-1]:.3f}",
+            delta=f"{1 - results['lambda'][-1]:.3f}",
+            delta_color="normal"
+        )
+    
+    with col3:
+        st.metric(
+            "⚠️ Risque d'effondrement",
+            f"{collapse['risk_score']:.1%}",
+            delta_color="off"
+        )
+    
+    with col4:
+        status = "✅ STABLE" if not collapse['collapse_imminent'] else "🚨 EFFONDREMENT"
+        st.metric(
+            "📊 Statut du système",
+            status,
+            delta_color="off"
+        )
+
+# ============================================================
+# CALIBRAGE
+# ============================================================
+
+def load_historical_data():
+    """Charge les données historiques pour calibrage"""
+    years = np.arange(0, 100)
+    debt = 100 * np.exp(0.03 * years) + 50 * np.random.randn(len(years))
+    debt = np.maximum(debt, 20)
+    
+    confidence = 0.8 - 0.004 * years + 0.1 * np.sin(0.1 * years) + 0.05 * np.random.randn(len(years))
+    confidence = np.clip(confidence, 0.1, 1.0)
+    
+    resources = 1000 - 8 * years + 50 * np.random.randn(len(years))
+    resources = np.maximum(resources, 100)
+    
+    return CalibrationData(years, debt, np.zeros_like(years), confidence, resources)
+
+# ============================================================
+# INTERFACE PRINCIPALE
+# ============================================================
+
+st.title("🌐 Modèle GRN / Yusuf - Simulation Systémique")
+st.markdown("*Analyse des cycles de confiance, dette et ressources*")
+
+# Création des paramètres
+params = {
+    'D0': D0, 'r': r,
+    'E0': E0, 'alpha': alpha,
+    'V0': V0, 'gamma': gamma, 'delta': delta,
+    'P_floor': 80.0, 'P_ceil': 120.0,
+    'C0': C0, 'lam': lam, 'mu': mu,
+    'theta_seuil': 0.6, 'V_seuil': 30.0
+}
+
+# Simulation
+with st.spinner("🔄 Simulation en cours..."):
+    try:
+        results, collapse = create_model(params, t_max)
+        st.success("✅ Simulation terminée avec succès !")
+    except Exception as e:
+        st.error(f"❌ Erreur lors de la simulation : {e}")
+        st.stop()
+
+# Affichage des métriques
+display_metrics(results, collapse)
+
+# Graphique principal
+st.plotly_chart(plot_results(results), use_container_width=True)
+
+# ============================================================
+# CALIBRAGE
+# ============================================================
+
+if show_calibration:
+    st.subheader("📊 Calibrage sur données historiques")
+    
+    with st.spinner("🔄 Calibrage en cours..."):
+        try:
+            data = load_historical_data()
+            model = GRNModel(params)
+            model.calibrate(data)
+            calibrated_results = model.simulate()
+            
+            fig_cal = go.Figure()
+            fig_cal.add_trace(go.Scatter(
+                x=data.years, y=data.debt,
+                name="Dette historique",
+                line=dict(color='red', dash='dash')
+            ))
+            fig_cal.add_trace(go.Scatter(
+                x=calibrated_results['time'][:len(data.years)],
+                y=calibrated_results['debt'][:len(data.years)],
+                name="Dette simulée",
+                line=dict(color='red')
+            ))
+            fig_cal.add_trace(go.Scatter(
+                x=data.years, y=data.confidence,
+                name="Confiance historique",
+                line=dict(color='cyan', dash='dash')
+            ))
+            fig_cal.add_trace(go.Scatter(
+                x=calibrated_results['time'][:len(data.years)],
+                y=calibrated_results['confidence'][:len(data.years)],
+                name="Confiance simulée",
+                line=dict(color='cyan')
+            ))
+            
+            fig_cal.update_layout(
+                title="Calibrage du modèle",
+                xaxis_title="Années",
+                template="plotly_dark"
+            )
+            st.plotly_chart(fig_cal, use_container_width=True)
+        except Exception as e:
+            st.error(f"❌ Erreur lors du calibrage : {e}")
+
+# ============================================================
+# ANALYSE DE L'EFFONDREMENT
+# ============================================================
+
+st.subheader("🔍 Analyse des risques d'effondrement")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.markdown("**Indicateurs de risque**")
+    for key, value in collapse['indicators'].items():
+        emoji = "✅" if not value else "⚠️"
+        st.write(f"{emoji} {key.replace('_', ' ').title()}: {value}")
+
+with col2:
+    st.markdown("**Diagnostic**")
+    st.metric("Score de risque", f"{collapse['risk_score']:.1%}")
+    st.metric("Effondrement imminent", "Oui" if collapse['collapse_imminent'] else "Non")
+    if collapse['time_to_collapse'] is not None:
+        st.metric("Temps estimé avant effondrement", f"{collapse['time_to_collapse']:.1f} unités")
+
+# ============================================================
+# EXPORT DES DONNÉES
+# ============================================================
+
+st.subheader("📥 Export des données")
+
+# Créer un DataFrame pour l'export
+df_export = pd.DataFrame({
+    'Temps': results['time'],
+    'Dette': results['debt'],
+    'Ressources': results['resources'],
+    'Stock': results['stock'],
+    'Confiance': results['confidence'],
+    'Monnaie': results['money'],
+    'Lambda': results['lambda']
+})
+
+st.download_button(
+    label="📥 Exporter les résultats (CSV)",
+    data=df_export.to_csv(index=False).encode('utf-8'),
+    file_name="simulation_grn.csv",
+    mime="text/csv"
+)
+
+# ============================================================
+# PIED DE PAGE
+# ============================================================
+
+st.markdown("---")
+st.markdown(
+    """
+    <div style='text-align: center; color: #666;'>
+        <small>Modèle GRN / Yusuf v1.0 - Analyse systémique des cycles de confiance et de dette</small>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
